@@ -476,13 +476,74 @@
                 const apiKey = "AIzaSyArUMBUTQX6ETDKGcFWnDRH6u9x2Gl4QaM"; 
                 const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
                 
-                // Hapus mode: 'cors' karena API Gemini by default sudah mendukungnya 
-                // Kadang mendefinisikan mode: 'cors' secara manual justru memicu preflight (OPTIONS) error di beberapa jaringan
+                // Fetch call disederhanakan.
+                const response = await fetch(apiUrl, { 
+                    method: 'POST', 
+                    // Penting: HANYA gunakan 'application/json' untuk Content-Type agar menghindari beberapa jenis preflight yang ketat.
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload) 
+                });
+                
+                // Jika koneksi berhasil tapi API menolak (misal kuota habis)
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    printLine(`[Error] API Menolak Request (Status ${response.status}): ${errorText.substring(0, 50)}...`, "color-root");
+                    return;
+                }
+
+                const result = await response.json();
+                
+                if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    const text = result.candidates[0].content.parts[0].text.replace(/[*_`#]/g, '');
+                    printLine("\n[SECURE COMM - ODIN]:", "color-ai");
+                    for (let line of text.split('\n')) { if (line.trim() !== "") { printLine(`  ${line}`, "color-ai"); await sleep(50); } }
+                    printLine(""); 
+                } else {
+                    printLine(`[Error] Respons dari AI tidak sesuai format.`, "color-root");
+                }
+            } catch (err) { 
+                // Error "Failed to fetch" akan ditangkap di sini.
+                printLine(`[CRITICAL ERROR] Gagal menghubungi server AI.`, "color-root");
+                printLine(`Pesan Error: ${err.message}`, "color-root");
+                printLine(`Saran Perbaikan:`, "color-warning");
+                printLine(`1. Matikan ekstensi AdBlocker (uBlock, Adblock Plus) di browser Anda.`, "color-warning");
+                printLine(`2. Jika Anda memakai browser Brave, matikan 'Brave Shields' untuk situs ini.`, "color-warning");
+                printLine(`3. Coba mainkan lewat browser mode Incognito/Private.`, "color-warning");
+            }
+        }
+
+        async function generateAIMission() {
+            printLine("[SYSTEM] AI Odin sedang memprosedural misi hacking baru...", "color-warning");
+            try {
+                const prompt = `Buat 1 skenario misi hacking singkat. Kembalikan HANYA format JSON valid tanpa markdown, dengan struktur persis seperti ini:
+                {
+                  "target_ip": "format IP acak (misal 10.x.x.x)",
+                  "tool_needed": "pilih HANYA salah satu: ftp atau ssh",
+                  "target_file": "nama_file_bebas.txt",
+                  "file_content": "isi data rahasia simulasi",
+                  "briefing": "pesan singkat instruksi misi"
+                }`;
+                const payload = { 
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { responseMimeType: "application/json" }
+                };
+                
+                // Menggunakan API Key yang Anda berikan
+                const apiKey = "AIzaSyArUMBUTQX6ETDKGcFWnDRH6u9x2Gl4QaM"; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+                
                 const response = await fetch(apiUrl, { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload) 
                 });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    printLine(`[Error] AI Gagal Membuat Misi (Status ${response.status}): ${errorText.substring(0, 50)}...`, "color-root");
+                    return;
+                }
+
                 const result = await response.json();
                 
                 if (response.ok && result.candidates?.[0]?.content?.parts?.[0]?.text) {
