@@ -1,51 +1,581 @@
-const CACHE_NAME = 'cyber-breach-v1';
-const urlsToCache = [
-  './',
-  './index.html',
-  './manifest.json'
-];
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Breach: Realistic Terminal</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0c0c0c">
+    <link rel="apple-touch-icon" href="https://placehold.co/192x192/0c0c0c/26A65B?text=CB">
+    <meta name="apple-mobile-web-app-status-bar" content="#0c0c0c">
 
-self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
-  );
-});
-
-self.addEventListener('fetch', event => {
-  // Jangan cache request ke Gemini API agar AI tetap berfungsi real-time
-  // JANGAN intercept request API ini
-  if (event.request.url.includes('generativelanguage.googleapis.com')) {
-    return; // Biarkan browser yang mengurus langsung (bypass service worker)
-  }
-
-  event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        // Jika file ada di cache, gunakan itu
-        if (response) {
-          return response;
+    <style>
+        body {
+            background-color: #0c0c0c;
+            color: #d3d7cf;
+            font-family: 'Consolas', 'Courier New', Courier, monospace;
+            margin: 0;
+            padding: 10px;
+            height: 100vh;
+            box-sizing: border-box;
+            overflow: hidden;
+            font-size: 15px;
+            line-height: 1.4;
         }
-        // Jika tidak, ambil dari jaringan
-        return fetch(event.request);
-      })
-  );
-});
 
-self.addEventListener('activate', event => {
-  const cacheWhitelist = [CACHE_NAME];
-  event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames.map(cacheName => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
-  );
-});
+        #terminal-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        #output {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin-bottom: 5px;
+        }
+
+        /* Custom Scrollbar for realism */
+        #terminal-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        #terminal-container::-webkit-scrollbar-track {
+            background: #0c0c0c; 
+        }
+        #terminal-container::-webkit-scrollbar-thumb {
+            background: #555; 
+        }
+
+        #input-area {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .prompt-line-1 {
+            color: #26A65B;
+        }
+        .prompt-user {
+            color: #4183D7;
+            font-weight: bold;
+        }
+        .prompt-dir {
+            color: #F0E68C;
+        }
+
+        .input-row {
+            display: flex;
+            align-items: center;
+        }
+
+        .prompt-symbol {
+            color: #26A65B;
+            margin-right: 8px;
+            white-space: pre;
+        }
+
+        #command-input {
+            background: transparent;
+            border: none;
+            color: #d3d7cf;
+            font-family: 'Consolas', 'Courier New', Courier, monospace;
+            font-size: 15px;
+            flex-grow: 1;
+            outline: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        /* Colors for different output types */
+        .color-root { color: #ff5555; font-weight: bold; }
+        .color-dir { color: #729FCF; font-weight: bold; }
+        .color-exec { color: #8AE234; font-weight: bold; }
+        .color-warning { color: #ffb86c; }
+        .color-ai { color: #bd93f9; } /* Color for AI Mentor output */
+    </style>
+</head>
+<body>
+
+    <div id="terminal-container">
+        <div id="output"></div>
+        <div id="input-area">
+            <div id="prompt-line-top" class="prompt-line-1">
+                ┌──(<span class="prompt-user">root㉿kali</span>)-[<span class="prompt-dir" id="pwd-display">~</span>]
+            </div>
+            <div class="input-row">
+                <span id="prompt-symbol" class="prompt-symbol">└─#</span>
+                <input type="text" id="command-input" autocomplete="off" autofocus spellcheck="false">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const outputDiv = document.getElementById('output');
+        const inputField = document.getElementById('command-input');
+        const pwdDisplay = document.getElementById('pwd-display');
+        const promptSymbol = document.getElementById('prompt-symbol');
+        const promptLineTop = document.getElementById('prompt-line-top');
+        const terminalContainer = document.getElementById('terminal-container');
+
+        // State Machine
+        let mode = 'local'; // local, ftp, ssh, wait_ftp_user, wait_ftp_pass, wait_ssh_pass, nc
+        let currentLevel = 1;
+        let remoteIP = "";
+        let ftpUserTemp = "";
+        let isProcessing = false;
+        let dynamicMission = null; // Menyimpan data misi dari AI
+
+        // Virtual File System
+        const vfs = {
+            "local": {
+                "tutorial.txt": "Selamat datang di CyberBreach OS.\nGunakan perintah standar Linux untuk bernavigasi.\nPerintah dasar: ls, cat <file>, clear, help.\nBARU: Butuh bantuan? Ketik 'mentor <pertanyaan>' untuk bertanya pada AI White Hat Mentor kami.\nBaca mission_01.txt untuk memulai.",
+                "mission_01.txt": "----- BEGIN PGP SIGNED MESSAGE -----\n\nTARGET: 192.168.1.15\nOBJECTIVE: Dapatkan file sys_passwords.txt\n\nINFO: Klien melaporkan adanya miskonfigurasi server file. Lakukan scan IP (nmap). Jika ditemukan layanan file transfer, coba masuk dengan akses anonim (anonymous login).\n\n----- END PGP SIGNATURE -----",
+                "rockyou.txt": "123456\npassword\nqwerty\nadmin123\npassword123\nroot\nletmein\nadmin1234"
+            },
+            "ftp_192.168.1.15": {
+                "sys_passwords.txt": "admin:5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\nbackup:bf100b1a030018890730ce0c35f29910"
+            },
+            "ssh_10.0.55.201": {
+                "secret.db": "ID | NAMA | SALDO\n1 | CEO_John | $5,000,000\n2 | CFO_Anna | $2,500,000\n[END OF FILE - DB DUMPED SUCCESSFUL]"
+            },
+            "ssh_172.16.254.2": {
+                "server.log": "14:02:11 - SYSTEM BOOT\n14:05:00 - SERVICE NGINX START\n14:15:22 - CRITICAL ERROR: UNAUTHORIZED ACCESS DETECTED\n14:15:23 - MALICIOUS PAYLOAD EXECUTED BY IP: 10.99.0.1\n14:15:25 - CONNECTION CLOSED"
+            },
+            "nc_10.99.0.1": {
+                "master_key.txt": "U0VDUkVUX0tFWV9GT1JfREVDUllQVA==" // Base64 for SECRET_KEY_FOR_DECRYPT
+            }
+        };
+
+        const emails = [
+            "Subject: Trivia #1 - CIA Triad\nKeamanan diukur dari 'CIA Triad': Confidentiality, Integrity, Availability.",
+            "Subject: Trivia #2 - Hacker vs Cracker\nWhite Hat (Hacker) mengaudit dengan izin. Black Hat (Cracker) merusak demi keuntungan pribadi.",
+            "Subject: Trivia #3 - Wordlist\nDalam serangan Brute Force, kita sering menggunakan wordlist. Salah satu yang paling terkenal di dunia nyata adalah 'rockyou.txt', bocoran dari peretasan tahun 2009.",
+            "Subject: Trivia #4 - Directory Traversal / Enumeration\nSeringkali admin menyembunyikan file backup di server web. Menggunakan tools seperti Gobuster membantu kita memetakan struktur tersembunyi tersebut.",
+            "Subject: Trivia #5 - Hashing vs Encryption\nHash (seperti MD5/SHA) bersifat satu arah (tidak bisa di-decrypt, hanya bisa di-crack dengan menebak). Enkripsi bisa dikembalikan ke teks asli jika punya kuncinya.",
+            "Subject: Trivia #6 - Log Analysis\nSeorang hacker atau analis SOC (Security Operations Center) yang baik harus ahli membaca log untuk mencari anomali atau jejak penyusup (IOC - Indicator of Compromise).",
+            "Subject: Trivia #7 - Backdoors\nSetelah meretas, penyerang sering meninggalkan 'Backdoor' (pintu belakang) dengan membuka port tersembunyi menggunakan Netcat, agar bisa kembali kapan saja."
+        ];
+
+        function printLine(text, className = "") {
+            const line = document.createElement('div');
+            if (className) line.innerHTML = `<span class="${className}">${text}</span>`;
+            else line.textContent = text; 
+            outputDiv.appendChild(line);
+            scrollToBottom();
+        }
+
+        function printHTML(htmlText) {
+            const line = document.createElement('div');
+            line.innerHTML = htmlText;
+            outputDiv.appendChild(line);
+            scrollToBottom();
+        }
+
+        function scrollToBottom() {
+            terminalContainer.scrollTop = terminalContainer.scrollHeight;
+        }
+
+        function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+        function updatePrompt() {
+            promptLineTop.style.display = (mode === 'local') ? 'block' : 'none';
+            if (mode === 'local') {
+                pwdDisplay.innerText = "~"; promptSymbol.innerText = "└─#"; inputField.type = "text";
+            } else if (mode === 'ftp') {
+                promptSymbol.innerText = "ftp>"; inputField.type = "text";
+            } else if (mode === 'wait_ftp_user') {
+                promptSymbol.innerText = `Name (${remoteIP}:root):`; inputField.type = "text";
+            } else if (mode === 'wait_ftp_pass') {
+                promptSymbol.innerText = "Password:"; inputField.type = "password";
+            } else if (mode === 'ssh') {
+                promptSymbol.innerText = `admin@${remoteIP}:~$`; inputField.type = "text";
+            } else if (mode === 'wait_ssh_pass') {
+                promptSymbol.innerText = `admin@${remoteIP}'s password:`; inputField.type = "password";
+            } else if (mode === 'nc') {
+                promptSymbol.innerText = `root@${remoteIP}:/#`; inputField.type = "text";
+            }
+            scrollToBottom();
+        }
+
+        async function processInput(val) {
+            if (isProcessing) return;
+            
+            let historyStr = "";
+            if (mode === 'local') historyStr = `<span class="prompt-line-1">┌──(</span><span class="prompt-user">root㉿kali</span><span class="prompt-line-1">)-[</span><span class="prompt-dir">~</span><span class="prompt-line-1">]</span>\n<span class="prompt-symbol">└─#</span> ${val}`;
+            else if (mode === 'wait_ftp_pass' || mode === 'wait_ssh_pass') historyStr = `${promptSymbol.innerText} `; 
+            else historyStr = `${promptSymbol.innerText} ${val}`;
+            
+            printHTML(historyStr);
+            isProcessing = true; inputField.disabled = true; inputField.value = "";
+            const args = val.trim().split(/\s+/);
+            const cmd = args[0].toLowerCase();
+
+            try {
+                if (mode === 'local') await handleLocal(cmd, args, val);
+                else if (mode.startsWith('wait_')) await handleAuth(val);
+                else if (mode === 'ftp') await handleFTP(cmd, args);
+                else if (mode === 'ssh') await handleSSH(cmd, args);
+                else if (mode === 'nc') await handleNC(cmd, args);
+            } catch (e) { console.error(e); }
+
+            isProcessing = false; inputField.disabled = false;
+            updatePrompt(); inputField.focus();
+        }
+
+        async function handleLocal(cmd, args, fullCmd) {
+            if (!cmd) return;
+            switch (cmd) {
+                case 'ls':
+                    let lsOutput = Object.keys(vfs['local']).join("  ");
+                    printLine(lsOutput);
+                    break;
+                case 'cat':
+                    if (args.length < 2) return printLine("cat: missing file operand");
+                    const file = args[1];
+                    if (vfs['local'][file]) {
+                        printLine(vfs['local'][file]);
+                        checkMissionProgress(file);
+                    } else printLine(`cat: ${file}: No such file or directory`);
+                    break;
+                case 'clear': outputDiv.innerHTML = ""; break;
+                case 'help':
+                    printLine("CyberBreach OS - Core Binaries:");
+                    printLine(" ls, cat, clear, grep - Basic Linux commands");
+                    printLine(" nmap     - Network port scanner");
+                    printLine(" ftp, ssh - Remote connection tools");
+                    printLine(" hydra    - Network logon cracker (Brute force)");
+                    printLine(" sqlmap   - SQL injection automation");
+                    printLine(" gobuster - Directory/File enumeration tool");
+                    printLine(" hashcat  - Advanced password recovery (Hash cracker)");
+                    printLine(" nc       - Netcat (Arbitrary TCP/UDP connections)");
+                    printLine(" decrypt  - Decrypt encrypted strings (Base64)");
+                    printLine(" mentor   - Secure chat with White Hat AI Mentor");
+                    break;
+                case 'mentor':
+                    if (args.length < 2) return printLine("usage: mentor <your question>");
+                    await callAI(args.slice(1).join(" ")); break;
+                case 'nmap': await runNmap(args); break;
+                case 'ftp':
+                    if (args.length < 2) return printLine("usage: ftp <host>");
+                    remoteIP = args[1]; printLine(`Connected to ${remoteIP}.`); printLine(`220 (vsFTPd 3.0.3)`); mode = 'wait_ftp_user'; break;
+                case 'hydra': await runHydra(fullCmd); break;
+                case 'ssh':
+                    if (args.length < 2) return printLine("usage: ssh user@hostname");
+                    const sshTarget = args[1].split('@');
+                    if (sshTarget.length !== 2) return printLine("ssh: Could not resolve hostname");
+                    remoteIP = sshTarget[1];
+                    if ((remoteIP === "10.0.55.201" || remoteIP === "172.16.254.2") && sshTarget[0] === "admin") {
+                        mode = 'wait_ssh_pass';
+                    } else { await sleep(1000); printLine("ssh: connect to host port 22: Connection timed out"); }
+                    break;
+                case 'sqlmap': await runSqlmap(fullCmd); break;
+                case 'gobuster': await runGobuster(fullCmd); break;
+                case 'hashcat': await runHashcat(args); break;
+                case 'grep': await runGrep(args); break;
+                case 'nc': await runNetcat(args); break;
+                case 'decrypt': await runDecrypt(args); break;
+                default: printLine(`bash: ${cmd}: command not found`);
+            }
+        }
+
+        async function runNmap(args) {
+            if (args.length < 2) return printLine("Nmap: missing target.");
+            const target = args[1];
+            printLine(`Starting Nmap 7.93 at 2026-08-18 14:24 WIB`); await sleep(800);
+            
+            printLine(`Nmap scan report for ${target}`);
+            printLine("Host is up (0.0012s latency).");
+            printLine("PORT   STATE SERVICE");
+            
+            if (target === "192.168.1.15" && currentLevel >= 1) {
+                printLine("21/tcp open  ftp\n80/tcp open  http");
+            } else if (target === "10.0.55.201" && currentLevel >= 2) {
+                printLine("22/tcp open  ssh");
+            } else if (target === "172.16.254.1" && currentLevel >= 3) {
+                printLine("80/tcp open  http\n443/tcp open https");
+            } else if (target === "172.16.254.2" && currentLevel >= 4) {
+                printLine("22/tcp open  ssh\n80/tcp open  http");
+            } else if (target === "10.99.0.1" && currentLevel >= 8) {
+                printLine("4444/tcp open  krb524 (Suspicious Backdoor)");
+            } else if (dynamicMission && target === dynamicMission.target_ip) {
+                printLine(`Open ports found for service: ${dynamicMission.tool_needed}`);
+            } else {
+                printLine("All 1000 scanned ports are in ignored states.");
+            }
+            printLine(`Nmap done: 1 IP address scanned.`);
+        }
+
+        async function runHydra(fullCmd) {
+            if (!fullCmd.includes("-l admin") || !fullCmd.includes("-P rockyou.txt")) return printLine("Usage: hydra -l <user> -P <passlist> ssh://<ip>");
+            printLine("Hydra v9.4 starting... attacking ssh service"); await sleep(1500);
+            if (fullCmd.includes("10.0.55.201")) {
+                printLine("[22][ssh] host: 10.0.55.201   login: admin   password: password123", "color-exec");
+            } else { printLine("0 valid passwords found"); }
+        }
+
+        async function runSqlmap(fullCmd) {
+            if (!fullCmd.includes("172.16.254.1") || !fullCmd.includes("--dump")) return printLine("Usage: sqlmap -u <url> --dump");
+            printLine("sqlmap {1.7.2#stable} starting..."); await sleep(1000);
+            printLine("[INFO] fetching tables for database: 'corp_db'"); await sleep(500);
+            printLine("+----+-------+------------------+\n| id | user  | password         |\n+----+-------+------------------+\n| 1  | admin | HACKED_DB_PW_999 |\n+----+-------+------------------+");
+            printLine("\n[SUCCESS] Dump completed.", "color-exec");
+            if(currentLevel === 3) advanceLevel(4, "172.16.254.2", "Gunakan 'gobuster dir -u http://172.16.254.2' untuk mencari direktori web tersembunyi.", 3);
+        }
+
+        async function runGobuster(fullCmd) {
+            if (!fullCmd.includes("172.16.254.2")) return printLine("Usage: gobuster dir -u <url>");
+            printLine("Gobuster v3.1.0 starting dirbusting..."); await sleep(1200);
+            printLine("/assets (Status: 301)\n/config.bak (Status: 200) [Size: 45]", "color-exec");
+            printLine("\n[SYSTEM] Gobuster automatically extracted '/config.bak' to local VFS.", "color-warning");
+            vfs['local']['config.bak'] = "DB_USER=root\nDB_PASS_MD5=fc5e038d38a57032085441e7fe7010b0";
+            if(currentLevel === 4) advanceLevel(5, "Local", "Baca config.bak (cat). Temukan hash MD5, gunakan 'hashcat config.bak' untuk men-cracknya.", 4);
+        }
+
+        async function runHashcat(args) {
+            if (args[1] !== "config.bak") return printLine("Usage: hashcat <file_containing_hash>");
+            printLine("hashcat (v6.2.5) starting..."); await sleep(1500);
+            printLine("fc5e038d38a57032085441e7fe7010b0:admin1234", "color-exec");
+            printLine("Status...........: Cracked");
+            if(currentLevel === 5) advanceLevel(6, "172.16.254.2", "Gunakan password 'admin1234' untuk login SSH (admin) ke 172.16.254.2. Cari file log.", 4);
+        }
+
+        async function runGrep(args) {
+            if (args.length < 3) return printLine("Usage: grep <pattern> <file>");
+            const file = args[2]; const pattern = args[1].replace(/["']/g, "");
+            if (!vfs['local'][file]) return printLine(`grep: ${file}: No such file`);
+            const lines = vfs['local'][file].split('\n');
+            let found = false;
+            lines.forEach(line => {
+                if (line.toLowerCase().includes(pattern.toLowerCase())) { printLine(line, "color-exec"); found = true; }
+            });
+            if (!found) printLine("");
+            if (currentLevel === 7 && file === "server.log" && pattern.toLowerCase() === "ip") {
+                advanceLevel(8, "10.99.0.1", "Log menunjukkan IP penyerang 10.99.0.1. Lakukan 'nmap' ke IP tersebut.", 5);
+            }
+        }
+
+        async function runNetcat(args) {
+            if (args.length < 3) return printLine("Usage: nc <ip> <port>");
+            if (args[1] === "10.99.0.1" && args[2] === "4444") {
+                printLine(`Connecting to ${args[1]}:${args[2]}...`); await sleep(800);
+                printLine("Connection established. Dropping to shell.", "color-exec");
+                mode = 'nc'; remoteIP = args[1];
+            } else { printLine("nc: connect to host failed: Connection refused"); }
+        }
+
+        async function runDecrypt(args) {
+            if (args.length < 2) return printLine("Usage: decrypt <string_or_file>");
+            const target = args[1];
+            let content = vfs['local'][target] ? vfs['local'][target] : target;
+            printLine(`Decrypting [Base64]...`); await sleep(500);
+            try { printLine(`Result: ${atob(content)}`, "color-exec"); } catch(e) { printLine("Error: Not valid Base64"); return; }
+            
+            if (currentLevel === 10) {
+                advanceLevel(11, "DYNAMIC AI NETWORK", "Misi statis selesai! Ketik 'mentor generate_mission' untuk meminta AI membuatkan misi tak terbatas (Infinite Mode) secara acak.", 6);
+            }
+        }
+
+        async function handleAuth(val) {
+            if (mode === 'wait_ftp_user') {
+                ftpUserTemp = val; printLine("331 Please specify the password."); mode = 'wait_ftp_pass';
+            } else if (mode === 'wait_ftp_pass') {
+                if (ftpUserTemp.toLowerCase() === 'anonymous' && (remoteIP === "192.168.1.15" || (dynamicMission && remoteIP === dynamicMission.target_ip))) {
+                    await sleep(300); printLine("230 Login successful."); mode = 'ftp';
+                } else { await sleep(1000); printLine("530 Login incorrect."); mode = 'local'; }
+            } else if (mode === 'wait_ssh_pass') {
+                if ((val === 'password123' && remoteIP === "10.0.55.201") || (val === 'admin1234' && remoteIP === "172.16.254.2")) {
+                    await sleep(500); printLine(`Welcome to Ubuntu Linux on ${remoteIP}`); mode = 'ssh';
+                } else { await sleep(1500); printLine("Permission denied, please try again."); }
+            }
+        }
+
+        async function handleFTP(cmd, args) {
+            if (cmd === 'ls') {
+                printLine("150 Here comes the directory listing.");
+                let targetVfs = (dynamicMission && remoteIP === dynamicMission.target_ip) ? vfs[`ftp_dynamic`] : vfs[`ftp_${remoteIP}`];
+                if(targetVfs) Object.keys(targetVfs).forEach(file => printLine(`-rw-r--r-- 1 root root 75 Aug 18 12:00 ${file}`));
+                printLine("226 Directory send OK.");
+            } else if (cmd === 'get' && args[1]) {
+                const file = args[1];
+                let targetVfs = (dynamicMission && remoteIP === dynamicMission.target_ip) ? vfs[`ftp_dynamic`] : vfs[`ftp_${remoteIP}`];
+                if (targetVfs && targetVfs[file]) {
+                    printLine(`Transferring ${file}...`); await sleep(500);
+                    vfs['local'][file] = targetVfs[file]; printLine("226 Transfer complete.");
+                    if (file === "sys_passwords.txt" && currentLevel === 1) advanceLevel(2, "10.0.55.201", "Gunakan 'hydra -l admin -P rockyou.txt ssh://10.0.55.201' untuk brute-force.", 0);
+                } else printLine("550 Failed to open file.");
+            } else if (cmd === 'exit' || cmd === 'quit') {
+                printLine("221 Goodbye."); mode = 'local';
+            } else printLine("Commands: ls, get, exit");
+        }
+
+        async function handleSSH(cmd, args) {
+            if (cmd === 'ls') {
+                if(vfs[`ssh_${remoteIP}`]) Object.keys(vfs[`ssh_${remoteIP}`]).forEach(file => printLine(file));
+            } else if (cmd === 'cat' && args[1]) {
+                const file = args[1];
+                if (vfs[`ssh_${remoteIP}`] && vfs[`ssh_${remoteIP}`][file]) {
+                    printLine(vfs[`ssh_${remoteIP}`][file]);
+                    if (file === "secret.db" && currentLevel === 2) advanceLevel(3, "172.16.254.1", "Gunakan 'sqlmap -u http://172.16.254.1/vuln.php?id=1 --dump' untuk database dump.", 1);
+                    if (file === "server.log" && currentLevel === 6) {
+                        vfs['local']['server.log'] = vfs[`ssh_${remoteIP}`][file]; // Auto download log
+                        advanceLevel(7, "Local", "Log disalin ke VFS lokal. Gunakan 'grep' untuk mencari 'IP' di file server.log.", 5);
+                    }
+                } else printLine(`cat: ${file}: No such file`);
+            } else if (cmd === 'exit') {
+                printLine("Connection closed."); mode = 'local';
+            } else printLine(`${cmd}: command not found (Restricted Shell)`);
+        }
+
+        async function handleNC(cmd, args) {
+            if (cmd === 'ls') {
+                if(vfs[`nc_${remoteIP}`]) Object.keys(vfs[`nc_${remoteIP}`]).forEach(file => printLine(file));
+            } else if (cmd === 'cat' && args[1]) {
+                const file = args[1];
+                if (vfs[`nc_${remoteIP}`] && vfs[`nc_${remoteIP}`][file]) {
+                    printLine(vfs[`nc_${remoteIP}`][file]);
+                    if (file === "master_key.txt" && currentLevel === 9) {
+                        vfs['local']['master_key.txt'] = vfs[`nc_${remoteIP}`][file]; // auto download
+                        advanceLevel(10, "Local", "Master key diunduh. File tampaknya dienkripsi Base64. Gunakan tool 'decrypt master_key.txt'.", 6);
+                    }
+                } else printLine(`cat: ${file}: No such file`);
+            } else if (cmd === 'exit') {
+                printLine("Connection closed."); mode = 'local';
+            } else printLine(`${cmd}: command not found`);
+        }
+
+        function advanceLevel(nextLevel, targetIP, tip, mailIndex) {
+            currentLevel = nextLevel;
+            vfs['local'][`mission_${nextLevel < 10 ? '0'+nextLevel : nextLevel}.txt`] = `----- BEGIN PGP SIGNED MESSAGE -----\n\nTARGET: ${targetIP}\nINFO: ${tip}\n\n----- END PGP SIGNATURE -----`;
+            if(emails[mailIndex]) vfs['local'][`mail_0${nextLevel-1}.txt`] = emails[mailIndex];
+            printLine(`\n[SYSTEM] Misi Selesai! File baru ditambahkan. Ketik 'ls' dan 'cat mission_${nextLevel < 10 ? '0'+nextLevel : nextLevel}.txt'`, "color-exec");
+        }
+
+        // Cek progress untuk misi dinamis AI
+        function checkMissionProgress(filename) {
+            if (dynamicMission && filename === dynamicMission.target_file) {
+                printLine(`\n[SYSTEM] INFINITE MISSION COMPLETE!`, "color-exec");
+                printLine(`Ketik 'mentor generate_mission' untuk misi berikutnya.`);
+                dynamicMission = null; // Reset for next
+            }
+        }
+
+        async function callAI(prompt) {
+            if (prompt.toLowerCase().trim() === "generate_mission") {
+                await generateAIMission();
+                return;
+            }
+
+            printLine("[System] Establishing secure connection to Mentor AI node...", "color-warning");
+            try {
+                const systemPrompt = "Kamu adalah 'Odin', Hacker White Hat veteran sekaligus Mentor di dalam game simulasi terminal 'Cyber Breach OS'. Jawab ringkas gaya terminal teks huruf kecil semua (tanpa markdown tebal/miring). PENTING: Player sedang berada di dalam terminal simulasi, jangan suruh buka browser, F12, atau View Source! Player HANYA bisa menggunakan command: ls, cat, nmap, ftp, ssh, hydra, sqlmap, gobuster, hashcat, grep, nc, decrypt. Jika player tanya cara mengerjakan Misi 1, suruh mereka baca misinya dengan 'cat mission_01.txt', lakukan scanning dengan 'nmap 192.168.1.15', lalu login dengan 'ftp 192.168.1.15' memakai username 'anonymous' dan ketik 'get sys_passwords.txt'. Edukasi player tentang keamanan siber.";
+                const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
+                
+                // Menggunakan API Key yang Anda berikan
+                const apiKey = "AIzaSyArUMBUTQX6ETDKGcFWnDRH6u9x2Gl4QaM"; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+                
+                // Hapus mode: 'cors' karena API Gemini by default sudah mendukungnya 
+                // Kadang mendefinisikan mode: 'cors' secara manual justru memicu preflight (OPTIONS) error di beberapa jaringan
+                const response = await fetch(apiUrl, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload) 
+                });
+                const result = await response.json();
+                
+                if (response.ok && result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                    const text = result.candidates[0].content.parts[0].text.replace(/[*_`#]/g, '');
+                    printLine("\n[SECURE COMM - ODIN]:", "color-ai");
+                    for (let line of text.split('\n')) { if (line.trim() !== "") { printLine(`  ${line}`, "color-ai"); await sleep(50); } }
+                    printLine(""); 
+                } else {
+                    const errorMsg = result.error ? result.error.message : "Invalid Response";
+                    printLine(`[Error] Akses AI Ditolak: ${errorMsg}`, "color-root");
+                }
+            } catch (err) { printLine(`[Error] Fetch Failed / CORS Blocked: ${err.message}`, "color-root"); }
+        }
+
+        async function generateAIMission() {
+            printLine("[SYSTEM] AI Odin sedang memprosedural misi hacking baru...", "color-warning");
+            try {
+                const prompt = `Buat 1 skenario misi hacking singkat. Kembalikan HANYA format JSON valid tanpa markdown, dengan struktur persis seperti ini:
+                {
+                  "target_ip": "format IP acak (misal 10.x.x.x)",
+                  "tool_needed": "pilih HANYA salah satu: ftp atau ssh",
+                  "target_file": "nama_file_bebas.txt",
+                  "file_content": "isi data rahasia simulasi",
+                  "briefing": "pesan singkat instruksi misi"
+                }`;
+                const payload = { 
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { responseMimeType: "application/json" }
+                };
+                
+                // Menggunakan API Key yang Anda berikan
+                const apiKey = "AIzaSyArUMBUTQX6ETDKGcFWnDRH6u9x2Gl4QaM"; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+                
+                // Hapus mode: 'cors' di sini juga
+                const response = await fetch(apiUrl, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload) 
+                });
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    const errorMsg = result.error ? result.error.message : "Invalid JSON response";
+                    printLine(`[Error] AI Gagal Membuat Misi: ${errorMsg}`, "color-root");
+                    return;
+                }
+
+                const jsonText = result.candidates[0].content.parts[0].text;
+                
+                dynamicMission = JSON.parse(jsonText);
+                currentLevel++;
+                
+                // Set up virtual environment for dynamic mission
+                if (dynamicMission.tool_needed === 'ftp') {
+                    vfs['ftp_dynamic'] = {};
+                    vfs['ftp_dynamic'][dynamicMission.target_file] = dynamicMission.file_content;
+                }
+                
+                vfs['local'][`mission_infinite_${currentLevel}.txt`] = `----- PGP SIGNED -----\nTARGET: ${dynamicMission.target_ip}\nTOOL: ${dynamicMission.tool_needed}\nINFO: ${dynamicMission.briefing}\n----- END PGP -----`;
+                
+                printLine(`\n[SYSTEM] Misi baru diunduh. Ketik 'cat mission_infinite_${currentLevel}.txt'`, "color-exec");
+                
+            } catch (err) {
+                printLine(`[Error] Gagal men-generate misi dari AI: ${err.message}`, "color-root");
+            }
+        }
+
+        inputField.addEventListener('keydown', function(e) { if (e.key === 'Enter') processInput(this.value); });
+        terminalContainer.addEventListener('click', () => { if (!isProcessing) inputField.focus(); });
+
+        async function bootSequence() {
+            inputField.disabled = true;
+            printLine("Linux version 5.4.0-kali #1 SMP"); await sleep(200);
+            printLine("[  OK  ] Reached target Multi-User System.");
+            printLine("\nWelcome to CyberBreach OS (Kali Linux environment)");
+            printLine("Ketik 'help' untuk daftar command. Baca 'tutorial.txt' untuk memulai.\n");
+            inputField.disabled = false; updatePrompt(); inputField.focus();
+        }
+
+        window.onload = bootSequence;
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(registration => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    })
+                    .catch(err => {
+                        console.log('ServiceWorker registration failed: ', err);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
