@@ -471,7 +471,11 @@
             try {
                 const systemPrompt = "Kamu adalah 'Odin', Hacker White Hat veteran sekaligus Mentor di dalam game simulasi terminal 'Cyber Breach OS'. Jawab ringkas gaya terminal teks huruf kecil semua (tanpa markdown tebal/miring). PENTING: Player sedang berada di dalam terminal simulasi, jangan suruh buka browser, F12, atau View Source! Player HANYA bisa menggunakan command: ls, cat, nmap, ftp, ssh, hydra, sqlmap, gobuster, hashcat, grep, nc, decrypt. Jika player tanya cara mengerjakan Misi 1, suruh mereka baca misinya dengan 'cat mission_01.txt', lakukan scanning dengan 'nmap 192.168.1.15', lalu login dengan 'ftp 192.168.1.15' memakai username 'anonymous' dan ketik 'get sys_passwords.txt'. Edukasi player tentang keamanan siber.";
                 const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=`;
+                
+                // Menggunakan API Key yang Anda berikan
+                const apiKey = "AQ.Ab8RN6LQLgeLab8x6cfmY60k5EjNKcpnaGd0PP1_ZG8KWZ-y_w"; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+                
                 const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const result = await response.json();
                 
@@ -499,7 +503,11 @@
                     contents: [{ parts: [{ text: prompt }] }],
                     generationConfig: { responseMimeType: "application/json" }
                 };
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=`;
+                
+                // Menggunakan API Key yang Anda berikan
+                const apiKey = "AQ.Ab8RN6LQLgeLab8x6cfmY60k5EjNKcpnaGd0PP1_ZG8KWZ-y_w"; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+                
                 const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const result = await response.json();
                 const jsonText = result.candidates[0].content.parts[0].text;
