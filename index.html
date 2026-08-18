@@ -473,19 +473,22 @@
                 const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
                 
                 // Menggunakan API Key yang Anda berikan
-                const apiKey = "AQ.Ab8RN6LQLgeLab8x6cfmY60k5EjNKcpnaGd0PP1_ZG8KWZ-y_w"; 
+                const apiKey = "AIzaSyArUMBUTQX6ETDKGcFWnDRH6u9x2Gl4QaM"; 
                 const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
                 
                 const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const result = await response.json();
                 
-                if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                if (response.ok && result.candidates?.[0]?.content?.parts?.[0]?.text) {
                     const text = result.candidates[0].content.parts[0].text.replace(/[*_`#]/g, '');
                     printLine("\n[SECURE COMM - ODIN]:", "color-ai");
                     for (let line of text.split('\n')) { if (line.trim() !== "") { printLine(`  ${line}`, "color-ai"); await sleep(50); } }
                     printLine(""); 
-                } else printLine("[Error] Connection failed.", "color-root");
-            } catch (err) { printLine(`[Error] API Timeout`, "color-root"); }
+                } else {
+                    const errorMsg = result.error ? result.error.message : "Invalid Response";
+                    printLine(`[Error] Akses AI Ditolak: ${errorMsg}`, "color-root");
+                }
+            } catch (err) { printLine(`[Error] API Timeout / Koneksi Terputus: ${err.message}`, "color-root"); }
         }
 
         async function generateAIMission() {
@@ -505,11 +508,18 @@
                 };
                 
                 // Menggunakan API Key yang Anda berikan
-                const apiKey = "AQ.Ab8RN6LQLgeLab8x6cfmY60k5EjNKcpnaGd0PP1_ZG8KWZ-y_w"; 
+                const apiKey = "AIzaSyArUMBUTQX6ETDKGcFWnDRH6u9x2Gl4QaM"; 
                 const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
                 
                 const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const result = await response.json();
+                
+                if (!response.ok) {
+                    const errorMsg = result.error ? result.error.message : "Invalid JSON response";
+                    printLine(`[Error] AI Gagal Membuat Misi: ${errorMsg}`, "color-root");
+                    return;
+                }
+
                 const jsonText = result.candidates[0].content.parts[0].text;
                 
                 dynamicMission = JSON.parse(jsonText);
