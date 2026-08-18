@@ -17,8 +17,9 @@ self.addEventListener('install', event => {
 
 self.addEventListener('fetch', event => {
   // Jangan cache request ke Gemini API agar AI tetap berfungsi real-time
+  // JANGAN intercept request API ini
   if (event.request.url.includes('generativelanguage.googleapis.com')) {
-    return;
+    return; // Biarkan browser yang mengurus langsung (bypass service worker)
   }
 
   event.respondWith(
